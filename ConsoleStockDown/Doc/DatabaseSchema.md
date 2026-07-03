@@ -1,0 +1,56 @@
+# Database Schema
+
+## StockDaily 資料表結構
+
+| 欄位名稱 | API 欄位名稱 | 資料型別 | 是否可空 | 中文說明 |
+| --- | --- | --- | --- | --- |
+| Id | - | int | 否 | 主鍵，自動遞增識別碼 |
+| TradeDate | Date | string | 否 | 交易日期，格式為 `yyyy-MM-dd` |
+| RawDate | Date | string | 否 | 原始 API 回傳日期，可能為民國年或西元年格式 |
+| StockCode | Code | string | 否 | 股票代號 |
+| StockName | Name | string | 否 | 股票名稱 |
+| TradeVolume | TradeVolume | long | 否 | 成交股數 |
+| TradeValue | TradeValue | long | 否 | 成交金額 |
+| OpeningPrice | OpeningPrice | decimal | 否 | 開盤價 |
+| HighestPrice | HighestPrice | decimal | 否 | 最高價 |
+| LowestPrice | LowestPrice | decimal | 否 | 最低價 |
+| ClosingPrice | ClosingPrice | decimal | 否 | 收盤價 |
+| PriceChange | Change | decimal | 否 | 漲跌價差 |
+| TransactionCount | Transaction | int | 否 | 成交筆數 |
+| ChangeRate | - | decimal? | 是 | 漲跌幅（相對前一交易日收盤價的變化率） |
+
+## InstitutionalTradeDaily 資料表結構
+
+| 欄位名稱 | API 欄位名稱 | 資料型別 | 是否可空 | 中文說明 |
+| --- | --- | --- | --- | --- |
+| Id | - | int | 否 | 主鍵，自動遞增識別碼 |
+| TradeDate | date | string | 否 | 交易日期，格式為 `yyyy-MM-dd` |
+| RawDate | date | string | 否 | 原始 API 回傳日期，格式通常為 `yyyyMMdd` |
+| StockCode | 證券代號 | string | 否 | 股票代號 |
+| StockName | 證券名稱 | string | 否 | 股票名稱 |
+| ForeignInvestorBuy | 外陸資買進股數(不含外資自營商) | long | 否 | 外資及陸資買進股數，不含外資自營商 |
+| ForeignInvestorSell | 外陸資賣出股數(不含外資自營商) | long | 否 | 外資及陸資賣出股數，不含外資自營商 |
+| ForeignInvestorNet | 外陸資買賣超股數(不含外資自營商) | long | 否 | 外資及陸資買賣超股數，不含外資自營商 |
+| ForeignDealerBuy | 外資自營商買進股數 | long | 否 | 外資自營商買進股數 |
+| ForeignDealerSell | 外資自營商賣出股數 | long | 否 | 外資自營商賣出股數 |
+| ForeignDealerNet | 外資自營商買賣超股數 | long | 否 | 外資自營商買賣超股數 |
+| InvestmentTrustBuy | 投信買進股數 | long | 否 | 投信買進股數 |
+| InvestmentTrustSell | 投信賣出股數 | long | 否 | 投信賣出股數 |
+| InvestmentTrustNet | 投信買賣超股數 | long | 否 | 投信買賣超股數 |
+| DealerNet | 自營商買賣超股數 | long | 否 | 自營商整體買賣超股數 |
+| DealerSelfBuy | 自營商買進股數(自行買賣) | long | 否 | 自營商自行買賣買進股數 |
+| DealerSelfSell | 自營商賣出股數(自行買賣) | long | 否 | 自營商自行買賣賣出股數 |
+| DealerSelfNet | 自營商買賣超股數(自行買賣) | long | 否 | 自營商自行買賣買賣超股數 |
+| DealerHedgeBuy | 自營商買進股數(避險) | long | 否 | 自營商避險買進股數 |
+| DealerHedgeSell | 自營商賣出股數(避險) | long | 否 | 自營商避險賣出股數 |
+| DealerHedgeNet | 自營商買賣超股數(避險) | long | 否 | 自營商避險買賣超股數 |
+| InstitutionalInvestorsNet | 三大法人買賣超股數 | long | 否 | 三大法人合計買賣超股數 |
+
+## 說明
+
+- `Id` 為資料表主鍵，透過 Linq2DB 的 `Identity` 屬性自動遞增。
+- `TradeDate` 用於查詢與判斷資料是否已存在，格式統一為 `yyyy-MM-dd`。
+- `RawDate` 用於保留原始 API 回傳日期，方便除錯與比對。
+- `ChangeRate` 只有當存在前一交易日資料時才會計算，否則可為 `NULL`。
+- `InstitutionalTradeDaily` 來自 TWSE `T86` API，`TradeDate` 會依最新 `StockDaily` 交易日轉成 `yyyyMMdd` 後查詢，確保兩張表使用相同交易日。
+- 資料庫建置時會建立 `StockDaily` 與 `InstitutionalTradeDaily` 資料表，並將對應 API 回傳資料寫入各自的資料表。

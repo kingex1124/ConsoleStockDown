@@ -1,0 +1,4 @@
+interface:
+  display_name: "新增 ConsoleStockDown 服務"
+  short_description: "依 ConsoleStockDown 專案架構新增服務與資料流程"
+  default_prompt: "Use $console-stockdown-add-service to add a new service to this ConsoleStockDown project following its existing architecture and documentation flow."
