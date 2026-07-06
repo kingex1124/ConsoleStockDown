@@ -35,13 +35,20 @@ using IHost host = Host.CreateDefaultBuilder(args)
             _.GetRequiredService<IStockRepository>(),
             _.GetRequiredService<ILogger<OtcStockService>>(),
             appSettings.OtcApiUrl));
+        services.AddSingleton<IOtcInstitutionalTradeService>(_ => new OtcInstitutionalTradeService(
+            _.GetRequiredService<IInstitutionalTradeRepository>(),
+            _.GetRequiredService<IStockRepository>(),
+            _.GetRequiredService<LatestTradeDateContext>(),
+            _.GetRequiredService<ILogger<OtcInstitutionalTradeService>>(),
+            appSettings.OtcInstitutionalTradeApiUrlTemplate,
+            appSettings.InstitutionalTradeFetchDate));
         services.AddSingleton<IInstitutionalTradeService>(_ => new InstitutionalTradeService(
             _.GetRequiredService<IInstitutionalTradeRepository>(),
             _.GetRequiredService<IStockRepository>(),
             _.GetRequiredService<LatestTradeDateContext>(),
+            _.GetRequiredService<IOtcInstitutionalTradeService>(),
             _.GetRequiredService<ILogger<InstitutionalTradeService>>(),
             appSettings.InstitutionalTradeApiUrlTemplate,
-            appSettings.OtcInstitutionalTradeApiUrlTemplate,
             appSettings.InstitutionalTradeFetchDate));
         services.AddSingleton(appSettings);
 

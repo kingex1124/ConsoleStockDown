@@ -13,6 +13,11 @@ public interface IInstitutionalTradeRepository
     Task InitializeDatabaseAsync();
 
     /// <summary>
+    /// 取得指定交易日期的全部三大法人資料，供不同來源的同步流程合併使用。
+    /// </summary>
+    Task<IReadOnlyList<InstitutionalTradeDaily>> GetByTradeDateAsync(string tradeDate);
+
+    /// <summary>
     /// 以交易方式覆寫指定交易日期的全部三大法人資料。
     /// </summary>
     Task ReplaceByTradeDateAsync(string tradeDate, IEnumerable<InstitutionalTradeDaily> items);

@@ -39,9 +39,11 @@
 12. 若 `InstitutionalTradeFetchDate` 有設定則使用該日期，否則以 `ApiUrl` 本次抓回的上市交易日組成上市與上櫃法人 API 的日期參數
 13. 呼叫 `https://www.twse.com.tw/rwd/zh/fund/T86`
 14. 呼叫 `https://www.tpex.org.tw/web/stock/3insti/daily_trade/3itrade_hedge_result.php`
-15. 若三大法人 API 回應異常則自動重試，並在 log 記錄 `stat` 與回應摘要
-16. 以同交易日 `StockDaily` 的股票代碼清單過濾上市與上櫃三大法人資料後合併寫入 `InstitutionalTradeDaily`
-17. 將執行結果寫入 Console 與日誌檔
+15. 以同交易日 `StockDaily` 的股票代碼清單過濾上市三大法人資料後寫入 `InstitutionalTradeDaily`
+16. 接續呼叫上櫃三大法人服務，並使用相同交易日期抓取 `OtcInstitutionalTradeApiUrlTemplate`
+17. 以上市已寫入資料為基礎，合併同交易日 `StockDaily` 股票代碼過濾後的上櫃三大法人資料再覆寫 `InstitutionalTradeDaily`
+18. 若三大法人 API 回應異常則自動重試，並在 log 記錄 `stat` 與回應摘要
+19. 將執行結果寫入 Console 與日誌檔
 
 ## 技術棧
 
@@ -79,10 +81,12 @@ ConsoleStockDown/
    │  └─ StockRepository.cs
    ├─ Services/
    │  ├─ IInstitutionalTradeService.cs
+   │  ├─ IOtcInstitutionalTradeService.cs
    │  ├─ IOtcStockService.cs
    │  ├─ IStockService.cs
    │  ├─ InstitutionalTradeService.cs
    │  ├─ LatestTradeDateContext.cs
+   │  ├─ OtcInstitutionalTradeService.cs
    │  ├─ OtcStockService.cs
    │  └─ StockService.cs
    ├─ Program.cs
@@ -215,7 +219,9 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - `Services/OtcStockService.cs`
   實作上櫃資料抓取、欄位轉換、漲跌幅計算，並保留同交易日上市資料後整批覆寫的流程。
 - `Services/InstitutionalTradeService.cs`
-  實作上市與上櫃三大法人買賣資料抓取、日期參數轉換、欄位解析、股票代碼過濾與合併寫入流程。
+  實作上市三大法人買賣資料抓取、日期參數轉換、欄位解析與寫入，並在完成後串接上櫃三大法人服務。
+- `Services/OtcInstitutionalTradeService.cs`
+  實作上櫃三大法人買賣資料抓取、欄位解析、股票代碼過濾，並保留同交易日已寫入的上市法人資料後整批覆寫。
 - `Services/LatestTradeDateContext.cs`
   保存本次執行由上市日線 API 解析出的交易日，供三大法人流程在未指定日期時沿用。
 - `Repository/StockRepository.cs`
@@ -236,7 +242,7 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - 程式每次執行都會以 API 最新交易日資料覆寫該交易日的既有資料。
 - 上市與上櫃日資料都會在保留同交易日另一個市場資料的前提下整批覆寫 `StockDaily`，避免重跑時互相覆蓋。
 - 三大法人資料預設依賴 `ApiUrl` 本次抓回的上市交易日來決定上市與上櫃法人 API 的日期參數，因此執行順序固定為先抓上市、再抓上櫃、最後抓法人。
-- 三大法人資料會再依同交易日 `StockDaily` 的股票代碼過濾一次，並把上市與上櫃結果合併後才寫入 `InstitutionalTradeDaily`。
+- 三大法人資料會依同交易日 `StockDaily` 的股票代碼過濾，上市法人先寫入，再由上櫃法人服務保留既有上市資料後合併覆寫同一張 `InstitutionalTradeDaily`。
 - 若 `InstitutionalTradeFetchDate` 設定格式錯誤，程式會直接拋出設定錯誤，避免誤抓資料。
 - 若 `T86` API 暫時回傳異常內容，程式會自動重試 3 次，並把 `stat` 與回應片段寫入 log 方便排查。
 - 同一交易日的刪除與重寫會包在單一資料庫交易內，若程式中途中止，該次變更會回滾，不會留下部分股票或法人資料。

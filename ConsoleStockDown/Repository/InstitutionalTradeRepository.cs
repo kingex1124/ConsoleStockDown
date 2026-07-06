@@ -31,6 +31,17 @@ public sealed class InstitutionalTradeRepository : IInstitutionalTradeRepository
     }
 
     /// <summary>
+    /// 取得指定交易日期的全部三大法人資料。
+    /// </summary>
+    public async Task<IReadOnlyList<InstitutionalTradeDaily>> GetByTradeDateAsync(string tradeDate)
+    {
+        using var db = new AppDataConnection(_connectionString);
+        return await db.GetTable<InstitutionalTradeDaily>()
+            .Where(x => x.TradeDate == tradeDate)
+            .ToListAsync();
+    }
+
+    /// <summary>
     /// 以單一交易刪除並重建指定交易日期的三大法人資料，避免中途中斷留下部分資料。
     /// </summary>
     public async Task ReplaceByTradeDateAsync(string tradeDate, IEnumerable<InstitutionalTradeDaily> items)
