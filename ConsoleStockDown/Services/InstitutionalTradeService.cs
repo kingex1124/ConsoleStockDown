@@ -1,6 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using ConsoleStockDown.Configuration;
 using ConsoleStockDown.Models;
 using ConsoleStockDown.Repository;
 using Microsoft.Extensions.Logging;
@@ -8,16 +8,22 @@ using Microsoft.Extensions.Logging;
 namespace ConsoleStockDown.Services;
 
 /// <summary>
-/// 負責抓取 TWSE 三大法人資料、轉換欄位並寫入資料庫。
+/// 負責抓取 TWSE 與 TPEX 三大法人資料、轉換欄位並寫入資料庫。
 /// </summary>
 public sealed class InstitutionalTradeService : IInstitutionalTradeService
 {
     private const int MaxApiRetryCount = 3;
     private static readonly TimeSpan ApiRetryDelay = TimeSpan.FromSeconds(2);
+    private delegate bool InstitutionalTradeRecordParser(
+        IReadOnlyList<JsonElement> record,
+        string tradeDate,
+        string rawTradeDate,
+        out InstitutionalTradeDaily institutionalTrade);
     private readonly IInstitutionalTradeRepository _repository;
     private readonly IStockRepository _stockRepository;
     private readonly ILogger<InstitutionalTradeService> _logger;
-    private readonly string _apiUrlTemplate;
+    private readonly string _twseApiUrlTemplate;
+    private readonly string _otcApiUrlTemplate;
     private readonly string? _configuredTradeDate;
 
     /// <summary>
@@ -27,13 +33,15 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
         IInstitutionalTradeRepository repository,
         IStockRepository stockRepository,
         ILogger<InstitutionalTradeService> logger,
-        string apiUrlTemplate,
+        string twseApiUrlTemplate,
+        string otcApiUrlTemplate,
         string? configuredTradeDate)
     {
         _repository = repository;
         _stockRepository = stockRepository;
         _logger = logger;
-        _apiUrlTemplate = apiUrlTemplate;
+        _twseApiUrlTemplate = twseApiUrlTemplate;
+        _otcApiUrlTemplate = otcApiUrlTemplate;
         _configuredTradeDate = configuredTradeDate;
     }
 
@@ -51,39 +59,33 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             return;
         }
 
-        var apiDate = ConvertTradeDateToApiDate(targetTradeDate);
-        if (apiDate is null)
-        {
-            _logger.LogWarning("Unable to convert trade date {TradeDate} to institutional trade API date.", targetTradeDate);
-            return;
-        }
-
-        var apiUrl = BuildApiUrl(apiDate);
         using var httpClient = new HttpClient();
-        _logger.LogInformation("Calling institutional trade API: {ApiUrl}", apiUrl);
-
-        var apiResponse = await GetApiResponseWithRetryAsync(httpClient, apiUrl, targetTradeDate);
-        if (apiResponse is null)
+        var twsePayload = await FetchTwseInstitutionalTradePayloadAsync(httpClient, targetTradeDate);
+        if (twsePayload is null)
         {
             return;
         }
 
-        if (apiResponse.Data.Count == 0)
+        var otcPayload = await FetchOtcInstitutionalTradePayloadAsync(httpClient, targetTradeDate);
+        if (otcPayload is null)
         {
-            _logger.LogWarning("No institutional trade data returned from API for trade date {TradeDate}.", targetTradeDate);
             return;
         }
 
-        var rawTradeDate = apiResponse.Date.Trim();
-        var tradeDate = ConvertDate(rawTradeDate);
-        if (!string.Equals(tradeDate, targetTradeDate, StringComparison.Ordinal))
+        var sourceTradeDates = new HashSet<string>(StringComparer.Ordinal);
+        sourceTradeDates.Add(twsePayload.TradeDate);
+        sourceTradeDates.Add(otcPayload.TradeDate);
+        if (sourceTradeDates.Count > 1)
         {
-            _logger.LogWarning(
-                "Institutional trade API returned trade date {ApiTradeDate}, which differs from requested trade date {RequestedTradeDate}.",
-                tradeDate,
-                targetTradeDate);
+            _logger.LogError(
+                "Institutional trade sources returned different trade dates for requested trade date {RequestedTradeDate}. TWSE: {TwseTradeDate}. TPEX: {TpexTradeDate}.",
+                targetTradeDate,
+                twsePayload.TradeDate,
+                otcPayload.TradeDate);
+            return;
         }
 
+        var tradeDate = twsePayload.TradeDate;
         var stocksByCode = await _stockRepository.GetStocksByTradeDateAsync(tradeDate);
         if (stocksByCode.Count == 0)
         {
@@ -99,13 +101,250 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             availableStockCodes.Count,
             tradeDate);
 
-        var items = new List<InstitutionalTradeDaily>(apiResponse.Data.Count);
-        var skippedCodeCount = 0;
-        foreach (var record in apiResponse.Data)
+        var twseItems = FilterAndParseInstitutionalTrades(
+            twsePayload.Records,
+            twsePayload.TradeDate,
+            twsePayload.RawTradeDate,
+            availableStockCodes,
+            "TWSE",
+            TryParseTwseRecord);
+
+        var otcItems = FilterAndParseInstitutionalTrades(
+            otcPayload.Records,
+            otcPayload.TradeDate,
+            otcPayload.RawTradeDate,
+            availableStockCodes,
+            "TPEX",
+            TryParseOtcRecord);
+
+        var itemsByCode = new Dictionary<string, InstitutionalTradeDaily>(StringComparer.Ordinal);
+        MergeInstitutionalTrades(itemsByCode, twseItems, "TWSE", tradeDate);
+        MergeInstitutionalTrades(itemsByCode, otcItems, "TPEX", tradeDate);
+        var items = itemsByCode.Values.ToList();
+
+        if (items.Count == 0)
         {
-            if (!TryParseRecord(record, tradeDate, rawTradeDate, out var institutionalTrade))
+            _logger.LogWarning(
+                "No institutional trade records remained after combining TWSE and TPEX data for trade date {TradeDate}.",
+                tradeDate);
+            return;
+        }
+
+        _logger.LogInformation("Persisting {Count} institutional trade records for trade date {TradeDate}.", items.Count, tradeDate);
+
+        await _repository.ReplaceByTradeDateAsync(tradeDate, items);
+
+        _logger.LogInformation("Inserted {Count} institutional trade records for trade date {TradeDate}.", items.Count, tradeDate);
+    }
+
+    /// <summary>
+    /// 抓取並整理上市三大法人 API 回應，保留後續過濾所需的原始資料列。
+    /// </summary>
+    private async Task<InstitutionalTradePayload?> FetchTwseInstitutionalTradePayloadAsync(
+        HttpClient httpClient,
+        string requestedTradeDate)
+    {
+        var apiDate = ConvertTradeDateToTwseApiDate(requestedTradeDate);
+        if (apiDate is null)
+        {
+            _logger.LogWarning("Unable to convert trade date {TradeDate} to TWSE institutional trade API date.", requestedTradeDate);
+            return null;
+        }
+
+        var apiUrl = BuildApiUrl(_twseApiUrlTemplate, apiDate, nameof(AppSettings.InstitutionalTradeApiUrlTemplate));
+        _logger.LogInformation("Calling TWSE institutional trade API: {ApiUrl}", apiUrl);
+
+        var apiResponse = await GetApiResponseWithRetryAsync(
+            httpClient,
+            apiUrl,
+            requestedTradeDate,
+            "TWSE institutional trade",
+            response => JsonSerializer.Deserialize<TwseInstitutionalTradeApiResponse>(response),
+            response => string.Equals(response.Stat, "OK", StringComparison.OrdinalIgnoreCase),
+            response => response.Stat);
+
+        if (apiResponse is null)
+        {
+            return null;
+        }
+
+        var rawTradeDate = apiResponse.Date.Trim();
+        var tradeDate = ConvertDate(rawTradeDate);
+        if (!string.Equals(tradeDate, requestedTradeDate, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "TWSE institutional trade API returned trade date {ApiTradeDate}, which differs from requested trade date {RequestedTradeDate}.",
+                tradeDate,
+                requestedTradeDate);
+        }
+
+        if (apiResponse.Data.Count == 0)
+        {
+            _logger.LogWarning("No data returned from TWSE institutional trade API for trade date {TradeDate}.", tradeDate);
+        }
+
+        return new InstitutionalTradePayload(tradeDate, rawTradeDate, apiResponse.Data);
+    }
+
+    /// <summary>
+    /// 抓取並整理上櫃三大法人 API 回應，保留後續過濾所需的原始資料列。
+    /// </summary>
+    private async Task<InstitutionalTradePayload?> FetchOtcInstitutionalTradePayloadAsync(
+        HttpClient httpClient,
+        string requestedTradeDate)
+    {
+        var apiDate = ConvertTradeDateToOtcApiDate(requestedTradeDate);
+        if (apiDate is null)
+        {
+            _logger.LogWarning("Unable to convert trade date {TradeDate} to TPEX institutional trade API date.", requestedTradeDate);
+            return null;
+        }
+
+        var apiUrl = BuildApiUrl(_otcApiUrlTemplate, apiDate, nameof(AppSettings.OtcInstitutionalTradeApiUrlTemplate));
+        _logger.LogInformation("Calling TPEX institutional trade API: {ApiUrl}", apiUrl);
+
+        var apiResponse = await GetApiResponseWithRetryAsync(
+            httpClient,
+            apiUrl,
+            requestedTradeDate,
+            "TPEX institutional trade",
+            response => JsonSerializer.Deserialize<OtcInstitutionalTradeApiResponse>(response),
+            response => string.Equals(response.Stat, "ok", StringComparison.OrdinalIgnoreCase),
+            response => response.Stat);
+
+        if (apiResponse is null)
+        {
+            return null;
+        }
+
+        var table = apiResponse.Tables.FirstOrDefault(item => item.Data.Count > 0);
+        if (table is null)
+        {
+            _logger.LogWarning("No data returned from TPEX institutional trade API for requested trade date {TradeDate}.", requestedTradeDate);
+            return new InstitutionalTradePayload(requestedTradeDate, string.Empty, []);
+        }
+
+        var rawTradeDate = table.Date.Trim();
+        var tradeDate = apiResponse.Date.Length > 0
+            ? ConvertDate(apiResponse.Date.Trim())
+            : ConvertDate(rawTradeDate);
+        if (!string.Equals(tradeDate, requestedTradeDate, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "TPEX institutional trade API returned trade date {ApiTradeDate}, which differs from requested trade date {RequestedTradeDate}.",
+                tradeDate,
+                requestedTradeDate);
+        }
+
+        return new InstitutionalTradePayload(tradeDate, rawTradeDate, table.Data);
+    }
+
+    /// <summary>
+    /// 以重試機制呼叫法人 API，並在回應異常時記錄狀態與回應片段。
+    /// </summary>
+    private async Task<TResponse?> GetApiResponseWithRetryAsync<TResponse>(
+        HttpClient httpClient,
+        string apiUrl,
+        string requestedTradeDate,
+        string sourceName,
+        Func<string, TResponse?> deserialize,
+        Func<TResponse, bool> isSuccess,
+        Func<TResponse, string> getStatus)
+    {
+        for (var attempt = 1; attempt <= MaxApiRetryCount; attempt++)
+        {
+            try
             {
-                _logger.LogWarning("Failed to parse an institutional trade record from API response.");
+                var response = await httpClient.GetStringAsync(apiUrl);
+                try
+                {
+                    var apiResponse = deserialize(response);
+                    if (apiResponse is not null && isSuccess(apiResponse))
+                    {
+                        if (attempt > 1)
+                        {
+                            _logger.LogInformation(
+                                "{SourceName} API recovered on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}.",
+                                sourceName,
+                                attempt,
+                                MaxApiRetryCount,
+                                requestedTradeDate);
+                        }
+
+                        return apiResponse;
+                    }
+
+                    _logger.LogWarning(
+                        "{SourceName} API returned an abnormal response on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. Stat: {Stat}. ApiUrl: {ApiUrl}. ResponsePreview: {ResponsePreview}",
+                        sourceName,
+                        attempt,
+                        MaxApiRetryCount,
+                        requestedTradeDate,
+                        apiResponse is null ? "(null)" : getStatus(apiResponse),
+                        apiUrl,
+                        CreateResponsePreview(response));
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "{SourceName} API returned invalid JSON on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. ApiUrl: {ApiUrl}. ResponsePreview: {ResponsePreview}",
+                        sourceName,
+                        attempt,
+                        MaxApiRetryCount,
+                        requestedTradeDate,
+                        apiUrl,
+                        CreateResponsePreview(response));
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "{SourceName} API request failed on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. ApiUrl: {ApiUrl}",
+                    sourceName,
+                    attempt,
+                    MaxApiRetryCount,
+                    requestedTradeDate,
+                    apiUrl);
+            }
+
+            if (attempt < MaxApiRetryCount)
+            {
+                await Task.Delay(ApiRetryDelay);
+            }
+        }
+
+        _logger.LogError(
+            "{SourceName} API failed after {MaxAttempts} attempts for trade date {TradeDate}. ApiUrl: {ApiUrl}",
+            sourceName,
+            MaxApiRetryCount,
+            requestedTradeDate,
+            apiUrl);
+
+        return default;
+    }
+
+    /// <summary>
+    /// 解析並過濾單一來源的法人資料列，只保留 StockDaily 已存在的股票代碼。
+    /// </summary>
+    private List<InstitutionalTradeDaily> FilterAndParseInstitutionalTrades(
+        IReadOnlyList<List<JsonElement>> records,
+        string tradeDate,
+        string rawTradeDate,
+        HashSet<string> availableStockCodes,
+        string sourceName,
+        InstitutionalTradeRecordParser parser)
+    {
+        var items = new List<InstitutionalTradeDaily>(records.Count);
+        var failedParseCount = 0;
+        var skippedCodeCount = 0;
+
+        foreach (var record in records)
+        {
+            if (!parser(record, tradeDate, rawTradeDate, out var institutionalTrade))
+            {
+                failedParseCount++;
                 continue;
             }
 
@@ -118,27 +357,68 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             items.Add(institutionalTrade);
         }
 
+        if (failedParseCount > 0)
+        {
+            _logger.LogWarning(
+                "Failed to parse {Count} {SourceName} institutional trade records from API response for trade date {TradeDate}.",
+                failedParseCount,
+                sourceName,
+                tradeDate);
+        }
+
         if (skippedCodeCount > 0)
         {
             _logger.LogInformation(
-                "Skipped {Count} institutional trade records because the stock code was not present in StockDaily for trade date {TradeDate}.",
+                "Skipped {Count} {SourceName} institutional trade records because the stock code was not present in StockDaily for trade date {TradeDate}.",
                 skippedCodeCount,
+                sourceName,
                 tradeDate);
         }
 
-        if (items.Count == 0)
+        _logger.LogInformation(
+            "Prepared {Count} {SourceName} institutional trade records after StockDaily filtering for trade date {TradeDate}.",
+            items.Count,
+            sourceName,
+            tradeDate);
+
+        return items;
+    }
+
+    /// <summary>
+    /// 合併單一來源的法人資料，若股票代碼重複則跳過後續資料並記錄警告。
+    /// </summary>
+    private void MergeInstitutionalTrades(
+        Dictionary<string, InstitutionalTradeDaily> itemsByCode,
+        IEnumerable<InstitutionalTradeDaily> items,
+        string sourceName,
+        string tradeDate)
+    {
+        var duplicateStockCodes = new List<string>();
+        var duplicateCount = 0;
+
+        foreach (var item in items)
+        {
+            if (itemsByCode.TryAdd(item.StockCode, item))
+            {
+                continue;
+            }
+
+            duplicateCount++;
+            if (duplicateStockCodes.Count < 10)
+            {
+                duplicateStockCodes.Add(item.StockCode);
+            }
+        }
+
+        if (duplicateCount > 0)
         {
             _logger.LogWarning(
-                "No institutional trade records remained after filtering by StockDaily for trade date {TradeDate}.",
-                tradeDate);
-            return;
+                "Skipped {Count} duplicate institutional trade records from {SourceName} for trade date {TradeDate}. Sample codes: {StockCodes}",
+                duplicateCount,
+                sourceName,
+                tradeDate,
+                string.Join(", ", duplicateStockCodes));
         }
-
-        _logger.LogInformation("Persisting {Count} institutional trade records for trade date {TradeDate}.", items.Count, tradeDate);
-
-        await _repository.ReplaceByTradeDateAsync(tradeDate, items);
-
-        _logger.LogInformation("Inserted {Count} institutional trade records for trade date {TradeDate}.", items.Count, tradeDate);
     }
 
     /// <summary>
@@ -177,93 +457,16 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     }
 
     /// <summary>
-    /// 以重試機制呼叫三大法人 API，並在回應異常時記錄狀態與回應片段。
-    /// </summary>
-    private async Task<InstitutionalTradeApiResponse?> GetApiResponseWithRetryAsync(
-        HttpClient httpClient,
-        string apiUrl,
-        string requestedTradeDate)
-    {
-        for (var attempt = 1; attempt <= MaxApiRetryCount; attempt++)
-        {
-            try
-            {
-                var response = await httpClient.GetStringAsync(apiUrl);
-                try
-                {
-                    var apiResponse = JsonSerializer.Deserialize<InstitutionalTradeApiResponse>(response);
-                    if (apiResponse is not null && string.Equals(apiResponse.Stat, "OK", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (attempt > 1)
-                        {
-                            _logger.LogInformation(
-                                "Institutional trade API recovered on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}.",
-                                attempt,
-                                MaxApiRetryCount,
-                                requestedTradeDate);
-                        }
-
-                        return apiResponse;
-                    }
-
-                    _logger.LogWarning(
-                        "Institutional trade API returned an abnormal response on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. Stat: {Stat}. ApiUrl: {ApiUrl}. ResponsePreview: {ResponsePreview}",
-                        attempt,
-                        MaxApiRetryCount,
-                        requestedTradeDate,
-                        apiResponse?.Stat ?? "(null)",
-                        apiUrl,
-                        CreateResponsePreview(response));
-                }
-                catch (JsonException ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "Institutional trade API returned invalid JSON on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. ApiUrl: {ApiUrl}. ResponsePreview: {ResponsePreview}",
-                        attempt,
-                        MaxApiRetryCount,
-                        requestedTradeDate,
-                        apiUrl,
-                        CreateResponsePreview(response));
-                }
-            }
-            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Institutional trade API request failed on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. ApiUrl: {ApiUrl}",
-                    attempt,
-                    MaxApiRetryCount,
-                    requestedTradeDate,
-                    apiUrl);
-            }
-
-            if (attempt < MaxApiRetryCount)
-            {
-                await Task.Delay(ApiRetryDelay);
-            }
-        }
-
-        _logger.LogError(
-            "Institutional trade API failed after {MaxAttempts} attempts for trade date {TradeDate}. ApiUrl: {ApiUrl}",
-            MaxApiRetryCount,
-            requestedTradeDate,
-            apiUrl);
-
-        return null;
-    }
-
-    /// <summary>
     /// 將交易日期代入 API URL 範本，組出實際請求位址。
     /// </summary>
-    private string BuildApiUrl(string apiDate)
+    private static string BuildApiUrl(string apiUrlTemplate, string apiDate, string settingName)
     {
-        if (!_apiUrlTemplate.Contains("{date}", StringComparison.Ordinal))
+        if (!apiUrlTemplate.Contains("{date}", StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("InstitutionalTradeApiUrlTemplate must contain the {date} placeholder.");
+            throw new InvalidOperationException($"{settingName} must contain the {{date}} placeholder.");
         }
 
-        return _apiUrlTemplate.Replace("{date}", apiDate, StringComparison.Ordinal);
+        return apiUrlTemplate.Replace("{date}", apiDate, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -304,9 +507,9 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     }
 
     /// <summary>
-    /// 將單筆法人資料列轉成 <see cref="InstitutionalTradeDaily"/> 模型。
+    /// 將上市單筆法人資料列轉成 <see cref="InstitutionalTradeDaily"/> 模型。
     /// </summary>
-    private static bool TryParseRecord(
+    private static bool TryParseTwseRecord(
         IReadOnlyList<JsonElement> record,
         string tradeDate,
         string rawTradeDate,
@@ -377,6 +580,54 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     }
 
     /// <summary>
+    /// 將上櫃單筆法人資料列轉成 <see cref="InstitutionalTradeDaily"/> 模型。
+    /// </summary>
+    private static bool TryParseOtcRecord(
+        IReadOnlyList<JsonElement> record,
+        string tradeDate,
+        string rawTradeDate,
+        out InstitutionalTradeDaily institutionalTrade)
+    {
+        institutionalTrade = new InstitutionalTradeDaily();
+
+        if (record.Count != 24)
+        {
+            return false;
+        }
+
+        var stockCode = GetElementText(record[0]).Trim();
+        var stockName = GetElementText(record[1]).Trim();
+        if (stockCode.Length == 0 || stockName.Length == 0)
+        {
+            return false;
+        }
+
+        institutionalTrade.RawDate = rawTradeDate;
+        institutionalTrade.TradeDate = tradeDate;
+        institutionalTrade.StockCode = stockCode;
+        institutionalTrade.StockName = stockName;
+        institutionalTrade.ForeignInvestorBuy = ParseLong(record[2]);
+        institutionalTrade.ForeignInvestorSell = ParseLong(record[3]);
+        institutionalTrade.ForeignInvestorNet = ParseLong(record[4]);
+        institutionalTrade.ForeignDealerBuy = ParseLong(record[5]);
+        institutionalTrade.ForeignDealerSell = ParseLong(record[6]);
+        institutionalTrade.ForeignDealerNet = ParseLong(record[7]);
+        institutionalTrade.InvestmentTrustBuy = ParseLong(record[11]);
+        institutionalTrade.InvestmentTrustSell = ParseLong(record[12]);
+        institutionalTrade.InvestmentTrustNet = ParseLong(record[13]);
+        institutionalTrade.DealerNet = ParseLong(record[22]);
+        institutionalTrade.DealerSelfBuy = ParseLong(record[14]);
+        institutionalTrade.DealerSelfSell = ParseLong(record[15]);
+        institutionalTrade.DealerSelfNet = ParseLong(record[16]);
+        institutionalTrade.DealerHedgeBuy = ParseLong(record[17]);
+        institutionalTrade.DealerHedgeSell = ParseLong(record[18]);
+        institutionalTrade.DealerHedgeNet = ParseLong(record[19]);
+        institutionalTrade.InstitutionalInvestorsNet = ParseLong(record[23]);
+
+        return true;
+    }
+
+    /// <summary>
     /// 將 API 日期統一轉成 <c>yyyy-MM-dd</c> 格式。
     /// </summary>
     private static string ConvertDate(string rawDate)
@@ -384,6 +635,15 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
         if (DateTime.TryParseExact(rawDate, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
         {
             return parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        if (rawDate.Length == 9
+            && int.TryParse(rawDate.Substring(0, 3), out var taiwanYearWithSlash)
+            && int.TryParse(rawDate.Substring(4, 2), out var monthWithSlash)
+            && int.TryParse(rawDate.Substring(7, 2), out var dayWithSlash))
+        {
+            var gregorianYear = taiwanYearWithSlash + 1911;
+            return new DateTime(gregorianYear, monthWithSlash, dayWithSlash).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         }
 
         if (rawDate.Length == 7
@@ -399,13 +659,29 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     }
 
     /// <summary>
-    /// 將資料庫使用的交易日期轉為 API 查詢參數格式 <c>yyyyMMdd</c>。
+    /// 將資料庫使用的交易日期轉為上市法人 API 查詢參數格式 <c>yyyyMMdd</c>。
     /// </summary>
-    private static string? ConvertTradeDateToApiDate(string tradeDate)
+    private static string? ConvertTradeDateToTwseApiDate(string tradeDate)
     {
         return DateTime.TryParseExact(tradeDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
             ? parsed.ToString("yyyyMMdd", CultureInfo.InvariantCulture)
             : null;
+    }
+
+    /// <summary>
+    /// 將資料庫使用的交易日期轉為上櫃法人 API 查詢參數格式 <c>yyy/MM/dd</c>。
+    /// </summary>
+    private static string? ConvertTradeDateToOtcApiDate(string tradeDate)
+    {
+        if (!DateTime.TryParseExact(tradeDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            return null;
+        }
+
+        var taiwanYear = parsed.Year - 1911;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{taiwanYear:000}/{parsed.Month:00}/{parsed.Day:00}");
     }
 
     /// <summary>
@@ -429,29 +705,5 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             JsonValueKind.Null => string.Empty,
             _ => element.GetRawText()
         };
-    }
-
-    /// <summary>
-    /// 對應 T86 API 最外層回傳結構的內部模型。
-    /// </summary>
-    private sealed record InstitutionalTradeApiResponse
-    {
-        /// <summary>
-        /// API 回傳狀態。
-        /// </summary>
-        [JsonPropertyName("stat")]
-        public string Stat { get; init; } = string.Empty;
-
-        /// <summary>
-        /// API 回傳的交易日期。
-        /// </summary>
-        [JsonPropertyName("date")]
-        public string Date { get; init; } = string.Empty;
-
-        /// <summary>
-        /// API 回傳的明細資料列。
-        /// </summary>
-        [JsonPropertyName("data")]
-        public List<List<JsonElement>> Data { get; init; } = [];
     }
 }

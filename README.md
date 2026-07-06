@@ -7,11 +7,12 @@
 - 呼叫 TWSE OpenAPI 取得當日上市股票日資料
 - 呼叫 TPEX OpenAPI 取得當日上櫃股票日資料
 - 呼叫 TWSE `T86` API 取得三大法人買賣超日報
+- 呼叫 TPEX 三大法人 API 取得上櫃三大法人買賣明細
 - 自動建立 SQLite `StockDaily` 資料表
 - 自動建立 SQLite `InstitutionalTradeDaily` 資料表
 - 將 API 日期統一轉成 `yyyy-MM-dd`
 - 依前一交易日收盤價計算 `ChangeRate`
-- 三大法人 API 會沿用最新日線交易日組出 `date` 參數，確保資料日期一致
+- 三大法人 API 會沿用最新日線交易日組出上市與上櫃查詢日期，確保資料日期一致
 - 可用 `appsettings.json` 覆寫三大法人抓取日期，方便補抓指定交易日
 - 三大法人資料只保留同交易日 `StockDaily` 已存在的股票代碼
 - 三大法人 API 若回應異常會自動重試 3 次，並在 log 記錄 `stat` 與回應片段
@@ -35,11 +36,12 @@
 9. 解析每筆上櫃股票資料並轉換欄位格式
 10. 以「前一交易日收盤價」計算上櫃資料的 `ChangeRate`
 11. 將上櫃資料附加寫入同一張 `StockDaily`
-12. 若 `InstitutionalTradeFetchDate` 有設定則使用該日期，否則以最新 `StockDaily` 交易日組成 TWSE `T86` 的 `date` 參數
+12. 若 `InstitutionalTradeFetchDate` 有設定則使用該日期，否則以最新 `StockDaily` 交易日組成上市與上櫃法人 API 的日期參數
 13. 呼叫 `https://www.twse.com.tw/rwd/zh/fund/T86`
-14. 若三大法人 API 回應異常則自動重試，並在 log 記錄 `stat` 與回應摘要
-15. 以同交易日 `StockDaily` 的股票代碼清單過濾三大法人資料後寫入 `InstitutionalTradeDaily`
-16. 將執行結果寫入 Console 與日誌檔
+14. 呼叫 `https://www.tpex.org.tw/web/stock/3insti/daily_trade/3itrade_hedge_result.php`
+15. 若三大法人 API 回應異常則自動重試，並在 log 記錄 `stat` 與回應摘要
+16. 以同交易日 `StockDaily` 的股票代碼清單過濾上市與上櫃三大法人資料後合併寫入 `InstitutionalTradeDaily`
+17. 將執行結果寫入 Console 與日誌檔
 
 ## 技術棧
 
@@ -67,6 +69,7 @@ ConsoleStockDown/
    │  ├─ FileLogger.cs
    │  └─ FileLoggerProvider.cs
    ├─ Models/
+   │  ├─ InstitutionalTradeApiModels.cs
    │  ├─ InstitutionalTradeDaily.cs
    │  └─ StockDaily.cs
    ├─ Repository/
@@ -124,6 +127,7 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
     "ApiUrl": "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
     "OtcApiUrl": "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
     "InstitutionalTradeApiUrlTemplate": "https://www.twse.com.tw/rwd/zh/fund/T86?date={date}&selectType=ALL&response=json",
+    "OtcInstitutionalTradeApiUrlTemplate": "https://www.tpex.org.tw/web/stock/3insti/daily_trade/3itrade_hedge_result.php?l=zh-tw&o=json&se=EW&t=D&d={date}&s=0,asc",
     // Optional: specify a date to fetch institutional trade data.
     // Leave null to use the latest StockDaily trade date, which is usually the previous trading day.
     // Supported formats: "2026-07-02" or "20260702".
@@ -140,8 +144,9 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 | `DatabaseFileName` | SQLite 檔案名稱。程式會將它放在專案目錄下。 |
 | `ApiUrl` | 上市股票日資料 API 位址。 |
 | `OtcApiUrl` | 上櫃股票日資料 API 位址。 |
-| `InstitutionalTradeApiUrlTemplate` | 三大法人 API URL 範本，必須包含 `{date}` 佔位符，程式會以最新股票交易日轉成 `yyyyMMdd` 後代入。 |
-| `InstitutionalTradeFetchDate` | 可選的三大法人抓取日期。支援 `yyyy-MM-dd` 與 `yyyyMMdd`，若為 `null` 或未設定，會改抓最新 `StockDaily` 交易日。 |
+| `InstitutionalTradeApiUrlTemplate` | 上市三大法人 API URL 範本，必須包含 `{date}` 佔位符，程式會以最新股票交易日轉成 `yyyyMMdd` 後代入。 |
+| `OtcInstitutionalTradeApiUrlTemplate` | 上櫃三大法人 API URL 範本，必須包含 `{date}` 佔位符，程式會以最新股票交易日轉成民國 `yyy/MM/dd` 後代入。 |
+| `InstitutionalTradeFetchDate` | 可選的三大法人抓取日期。支援 `yyyy-MM-dd` 與 `yyyyMMdd`，若為 `null` 或未設定，上市與上櫃三大法人都會改抓最新 `StockDaily` 交易日。 |
 | `LogFilePath` | 日誌基底路徑。實際輸出時會自動加上日期，例如 `logs/stock-service-2026-07-01.log`。 |
 
 ## 資料輸出位置
@@ -188,8 +193,8 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - 若 API 日期為 `yyyyMMdd`，會轉成 `yyyy-MM-dd`
 - 若 API 日期為民國格式，例如 `1140701`，會轉成西元日期
 - 上櫃 API 若價格或漲跌欄位出現 `除息`、`除權`、`除權息`、`---` 或 `----`，會先以 `0` 寫入避免解析失敗
-- 若有設定 `InstitutionalTradeFetchDate`，三大法人資料會使用該日期查詢 `T86` API
-- 若未設定 `InstitutionalTradeFetchDate`，三大法人資料會以最新 `StockDaily.TradeDate` 轉成 `yyyyMMdd` 查詢 `T86` API
+- 若有設定 `InstitutionalTradeFetchDate`，上市與上櫃三大法人資料都會使用該日期查詢對應 API
+- 若未設定 `InstitutionalTradeFetchDate`，三大法人資料會以最新 `StockDaily.TradeDate` 轉成上市 `yyyyMMdd` 與上櫃民國 `yyy/MM/dd` 格式後查詢對應 API
 - 三大法人資料只會保留同交易日已存在於 `StockDaily` 的股票代碼，會自動排除目前流程用不到的其他證券資料
 - `ChangeRate` 計算方式為：
 
@@ -208,7 +213,7 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - `Services/OtcStockService.cs`
   實作上櫃資料抓取、欄位轉換、漲跌幅計算與資料附加寫入流程。
 - `Services/InstitutionalTradeService.cs`
-  實作三大法人買賣資料抓取、日期參數轉換、欄位解析與資料寫入流程。
+  實作上市與上櫃三大法人買賣資料抓取、日期參數轉換、欄位解析、股票代碼過濾與合併寫入流程。
 - `Repository/StockRepository.cs`
   封裝 SQLite 存取邏輯，包含建表、查詢、刪除與新增。
 - `Repository/InstitutionalTradeRepository.cs`
@@ -219,13 +224,15 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
   定義 `StockDaily` 資料表欄位與對應模型。
 - `Models/InstitutionalTradeDaily.cs`
   定義 `InstitutionalTradeDaily` 資料表欄位與對應模型。
+- `Models/InstitutionalTradeApiModels.cs`
+  定義法人同步流程使用的 API 回應與中繼模型。
 
 ## 注意事項
 
 - 程式每次執行都會以 API 最新交易日資料覆寫該交易日的既有資料。
 - 上市資料會先覆寫同交易日的 `StockDaily`，再附加寫入同交易日的上櫃資料。
-- 三大法人資料依賴 `StockDaily` 的最新交易日來決定 `T86` API 的 `date` 參數，因此執行順序固定為先抓上市、再抓上櫃、最後抓法人。
-- 三大法人資料會再依同交易日 `StockDaily` 的股票代碼過濾一次，因此只有本專案已同步的股票代碼會被寫入 `InstitutionalTradeDaily`。
+- 三大法人資料依賴 `StockDaily` 的最新交易日來決定上市與上櫃法人 API 的日期參數，因此執行順序固定為先抓上市、再抓上櫃、最後抓法人。
+- 三大法人資料會再依同交易日 `StockDaily` 的股票代碼過濾一次，並把上市與上櫃結果合併後才寫入 `InstitutionalTradeDaily`。
 - 若 `InstitutionalTradeFetchDate` 設定格式錯誤，程式會直接拋出設定錯誤，避免誤抓資料。
 - 若 `T86` API 暫時回傳異常內容，程式會自動重試 3 次，並把 `stat` 與回應片段寫入 log 方便排查。
 - 同一交易日的刪除與重寫會包在單一資料庫交易內，若程式中途中止，該次變更會回滾，不會留下部分股票或法人資料。

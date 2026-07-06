@@ -38,6 +38,7 @@ using IHost host = Host.CreateDefaultBuilder(args)
             _.GetRequiredService<IStockRepository>(),
             _.GetRequiredService<ILogger<InstitutionalTradeService>>(),
             appSettings.InstitutionalTradeApiUrlTemplate,
+            appSettings.OtcInstitutionalTradeApiUrlTemplate,
             appSettings.InstitutionalTradeFetchDate));
         services.AddSingleton(appSettings);
 
