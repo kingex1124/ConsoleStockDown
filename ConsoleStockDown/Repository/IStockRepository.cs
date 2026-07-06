@@ -37,8 +37,4 @@ public interface IStockRepository
     /// </summary>
     Task ReplaceByTradeDateAsync(string tradeDate, IEnumerable<StockDaily> items);
 
-    /// <summary>
-    /// 以交易方式附加寫入股票資料。
-    /// </summary>
-    Task InsertAsync(IEnumerable<StockDaily> items);
 }

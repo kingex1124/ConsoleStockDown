@@ -14,6 +14,7 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
 {
     private const int MaxApiRetryCount = 3;
     private static readonly TimeSpan ApiRetryDelay = TimeSpan.FromSeconds(2);
+    private static readonly string[] TaiwanTimeZoneIds = ["Taipei Standard Time", "Asia/Taipei"];
     private delegate bool InstitutionalTradeRecordParser(
         IReadOnlyList<JsonElement> record,
         string tradeDate,
@@ -116,6 +117,12 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             availableStockCodes,
             "TPEX",
             TryParseOtcRecord);
+
+        otcItems = await RetryFilterOtcInstitutionalTradesWithSupplementalStockCodesAsync(
+            tradeDate,
+            otcPayload,
+            availableStockCodes,
+            otcItems);
 
         var itemsByCode = new Dictionary<string, InstitutionalTradeDaily>(StringComparer.Ordinal);
         MergeInstitutionalTrades(itemsByCode, twseItems, "TWSE", tradeDate);
@@ -422,6 +429,53 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     }
 
     /// <summary>
+    /// 當同日 <see cref="StockDaily"/> 缺少上櫃股票代碼時，補用最新交易日的股票清單重試一次上櫃法人過濾。
+    /// </summary>
+    private async Task<List<InstitutionalTradeDaily>> RetryFilterOtcInstitutionalTradesWithSupplementalStockCodesAsync(
+        string tradeDate,
+        InstitutionalTradePayload otcPayload,
+        HashSet<string> availableStockCodes,
+        List<InstitutionalTradeDaily> otcItems)
+    {
+        if (otcItems.Count > 0 || otcPayload.Records.Count == 0)
+        {
+            return otcItems;
+        }
+
+        var latestStockTradeDate = await _stockRepository.GetLatestTradeDateAsync();
+        if (string.IsNullOrWhiteSpace(latestStockTradeDate)
+            || string.Equals(latestStockTradeDate, tradeDate, StringComparison.Ordinal))
+        {
+            return otcItems;
+        }
+
+        var latestStocksByCode = await _stockRepository.GetStocksByTradeDateAsync(latestStockTradeDate);
+        if (latestStocksByCode.Count == 0)
+        {
+            return otcItems;
+        }
+
+        var supplementalStockCodes = new HashSet<string>(availableStockCodes, StringComparer.Ordinal);
+        foreach (var stockCode in latestStocksByCode.Keys)
+        {
+            supplementalStockCodes.Add(stockCode);
+        }
+
+        _logger.LogWarning(
+            "No TPEX institutional trade records remained after filtering by StockDaily trade date {TradeDate}. Retrying with supplemental stock codes from latest StockDaily trade date {LatestTradeDate}.",
+            tradeDate,
+            latestStockTradeDate);
+
+        return FilterAndParseInstitutionalTrades(
+            otcPayload.Records,
+            otcPayload.TradeDate,
+            otcPayload.RawTradeDate,
+            supplementalStockCodes,
+            "TPEX fallback",
+            TryParseOtcRecord);
+    }
+
+    /// <summary>
     /// 決定本次抓取三大法人資料所使用的交易日期。
     /// </summary>
     private async Task<string?> ResolveTargetTradeDateAsync()
@@ -442,18 +496,63 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             return configuredTradeDate;
         }
 
-        var latestTradeDate = await _stockRepository.GetLatestTradeDateAsync();
+        var currentTaiwanDate = GetCurrentTaiwanDate().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var latestTradeDate = await _stockRepository.GetLatestTradeDateBeforeDateAsync(currentTaiwanDate);
+        if (latestTradeDate is not null)
+        {
+            _logger.LogInformation(
+                "No InstitutionalTradeFetchDate configured. Using latest stock trade date {TradeDate} before current Taiwan date {CurrentDate}.",
+                latestTradeDate,
+                currentTaiwanDate);
+
+            return latestTradeDate;
+        }
+
+        latestTradeDate = await _stockRepository.GetLatestTradeDateAsync();
         if (latestTradeDate is null)
         {
             _logger.LogWarning("No stock trade date found. Skipping institutional trade sync.");
             return null;
         }
 
-        _logger.LogInformation(
-            "No InstitutionalTradeFetchDate configured. Using latest stock trade date {TradeDate}.",
+        _logger.LogWarning(
+            "No stock trade date found before current Taiwan date {CurrentDate}. Falling back to latest stock trade date {TradeDate}.",
+            currentTaiwanDate,
             latestTradeDate);
 
         return latestTradeDate;
+    }
+
+    /// <summary>
+    /// 取得台灣時區的目前日期，供預設交易日判斷使用。
+    /// </summary>
+    private static DateOnly GetCurrentTaiwanDate()
+    {
+        var taiwanTimeZone = ResolveTaiwanTimeZone();
+        var taiwanNow = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, taiwanTimeZone);
+        return DateOnly.FromDateTime(taiwanNow.DateTime);
+    }
+
+    /// <summary>
+    /// 解析台灣時區，兼容 Windows 與 Linux/macOS 的時區識別名稱。
+    /// </summary>
+    private static TimeZoneInfo ResolveTaiwanTimeZone()
+    {
+        foreach (var timeZoneId in TaiwanTimeZoneIds)
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+            }
+            catch (TimeZoneNotFoundException)
+            {
+            }
+            catch (InvalidTimeZoneException)
+            {
+            }
+        }
+
+        return TimeZoneInfo.Local;
     }
 
     /// <summary>

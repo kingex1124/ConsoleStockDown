@@ -115,11 +115,43 @@ public sealed class OtcStockService : IOtcStockService
         }
 
         var latestTradeDate = stockItems.Select(x => x.TradeDate).Distinct().OrderByDescending(x => x).First();
-        _logger.LogInformation("Persisting {Count} OTC records for trade date {TradeDate}.", stockItems.Count, latestTradeDate);
+        var mergedItems = await MergeWithExistingTwseStocksAsync(latestTradeDate, stockItems);
+        _logger.LogInformation("Persisting {Count} stock records for trade date {TradeDate}.", mergedItems.Count, latestTradeDate);
 
-        await _repository.InsertAsync(stockItems);
+        await _repository.ReplaceByTradeDateAsync(latestTradeDate, mergedItems);
 
-        _logger.LogInformation("Inserted {Count} OTC records for trade date {TradeDate}.", stockItems.Count, latestTradeDate);
+        _logger.LogInformation("Inserted {Count} stock records for trade date {TradeDate}.", mergedItems.Count, latestTradeDate);
+    }
+
+    /// <summary>
+    /// 重新整理上櫃資料時，保留同交易日已存在的上市資料，避免跨市場資料互相覆蓋。
+    /// </summary>
+    private async Task<List<StockDaily>> MergeWithExistingTwseStocksAsync(string tradeDate, List<StockDaily> otcItems)
+    {
+        var existingStocksByCode = await _repository.GetStocksByTradeDateAsync(tradeDate);
+        if (existingStocksByCode.Count == 0)
+        {
+            return otcItems;
+        }
+
+        var otcStockCodes = new HashSet<string>(otcItems.Select(x => x.StockCode), StringComparer.Ordinal);
+        var preservedTwseItems = existingStocksByCode.Values
+            .Where(item => !otcStockCodes.Contains(item.StockCode))
+            .ToList();
+
+        if (preservedTwseItems.Count == 0)
+        {
+            return otcItems;
+        }
+
+        _logger.LogInformation(
+            "Preserving {Count} TWSE stock records already stored for trade date {TradeDate} while refreshing OTC data.",
+            preservedTwseItems.Count,
+            tradeDate);
+
+        return preservedTwseItems
+            .Concat(otcItems)
+            .ToList();
     }
 
     /// <summary>

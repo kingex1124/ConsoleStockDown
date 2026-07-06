@@ -109,11 +109,43 @@ public sealed class StockService : IStockService
         }
 
         var latestTradeDate = stockItems.Select(x => x.TradeDate).Distinct().OrderByDescending(x => x).First();
-        _logger.LogInformation("Persisting {Count} records for trade date {TradeDate}.", stockItems.Count, latestTradeDate);
+        var mergedItems = await MergeWithExistingOtcStocksAsync(latestTradeDate, stockItems);
+        _logger.LogInformation("Persisting {Count} stock records for trade date {TradeDate}.", mergedItems.Count, latestTradeDate);
 
-        await _repository.ReplaceByTradeDateAsync(latestTradeDate, stockItems);
+        await _repository.ReplaceByTradeDateAsync(latestTradeDate, mergedItems);
 
-        _logger.LogInformation("Inserted {Count} records for trade date {TradeDate}.", stockItems.Count, latestTradeDate);
+        _logger.LogInformation("Inserted {Count} stock records for trade date {TradeDate}.", mergedItems.Count, latestTradeDate);
+    }
+
+    /// <summary>
+    /// 重新整理上市資料時，保留同交易日已存在的上櫃資料，避免跨市場資料互相覆蓋。
+    /// </summary>
+    private async Task<List<StockDaily>> MergeWithExistingOtcStocksAsync(string tradeDate, List<StockDaily> twseItems)
+    {
+        var existingStocksByCode = await _repository.GetStocksByTradeDateAsync(tradeDate);
+        if (existingStocksByCode.Count == 0)
+        {
+            return twseItems;
+        }
+
+        var twseStockCodes = new HashSet<string>(twseItems.Select(x => x.StockCode), StringComparer.Ordinal);
+        var preservedOtcItems = existingStocksByCode.Values
+            .Where(item => !twseStockCodes.Contains(item.StockCode))
+            .ToList();
+
+        if (preservedOtcItems.Count == 0)
+        {
+            return twseItems;
+        }
+
+        _logger.LogInformation(
+            "Preserving {Count} OTC stock records already stored for trade date {TradeDate} while refreshing TWSE data.",
+            preservedOtcItems.Count,
+            tradeDate);
+
+        return twseItems
+            .Concat(preservedOtcItems)
+            .ToList();
     }
 
     /// <summary>

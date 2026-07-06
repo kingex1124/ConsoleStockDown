@@ -101,19 +101,4 @@ public sealed class StockRepository : IStockRepository
         transaction.Commit();
     }
 
-    /// <summary>
-    /// 以單一交易附加寫入多筆股票資料。
-    /// </summary>
-    public async Task InsertAsync(IEnumerable<StockDaily> items)
-    {
-        using var db = new AppDataConnection(_connectionString);
-        using var transaction = db.BeginTransaction();
-
-        foreach (var item in items)
-        {
-            await db.InsertAsync(item);
-        }
-
-        transaction.Commit();
-    }
 }

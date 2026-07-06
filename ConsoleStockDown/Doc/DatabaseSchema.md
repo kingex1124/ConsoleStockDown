@@ -54,7 +54,7 @@
 - `StockDaily` 同時儲存 TWSE `STOCK_DAY_ALL` 與 TPEX `tpex_mainboard_quotes` 的日資料。
 - `ChangeRate` 只有當存在前一交易日資料時才會計算，否則可為 `NULL`。
 - 上櫃 API 若回傳 `除息`、`除權`、`除權息`、`---` 或 `----` 等非數值內容，系統會以 `0` 寫入對應數值欄位以避免解析失敗。
-- `InstitutionalTradeDaily` 來自 TWSE `T86` API 與 TPEX `3itrade_hedge_result` API，`TradeDate` 會依最新 `StockDaily` 交易日轉成上市 `yyyyMMdd` 與上櫃民國 `yyy/MM/dd` 後查詢，確保兩張表使用相同交易日。
+- `InstitutionalTradeDaily` 來自 TWSE `T86` API 與 TPEX `3itrade_hedge_result` API，若未指定抓取日期，`TradeDate` 會依台灣當日前一個 `StockDaily` 交易日轉成上市 `yyyyMMdd` 與上櫃民國 `yyy/MM/dd` 後查詢，確保兩張表使用相同交易日。
 - 寫入 `InstitutionalTradeDaily` 前，系統會先以同交易日 `StockDaily` 已存在的股票代碼過濾上市與上櫃法人資料，只保留本專案實際需要的股票。
 - 上市與上櫃法人資料會先合併後再寫入同一張 `InstitutionalTradeDaily` 資料表。
 - 資料庫建置時會建立 `StockDaily` 與 `InstitutionalTradeDaily` 資料表，並將對應 API 回傳資料寫入各自的資料表。
