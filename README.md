@@ -12,6 +12,7 @@
 - 依前一交易日收盤價計算 `ChangeRate`
 - 三大法人 API 會沿用最新日線交易日組出 `date` 參數，確保資料日期一致
 - 可用 `appsettings.json` 覆寫三大法人抓取日期，方便補抓指定交易日
+- 三大法人 API 若回應異常會自動重試 3 次，並在 log 記錄 `stat` 與回應片段
 - 寫入前先刪除同交易日舊資料，避免重複
 - 同時輸出 Console 與檔案日誌
 - 日誌檔依日期分檔，例如 `stock-service-2026-07-01.log`
@@ -29,8 +30,9 @@
 7. 刪除當前交易日既有 `StockDaily` 資料後重新寫入
 8. 若 `InstitutionalTradeFetchDate` 有設定則使用該日期，否則以最新 `StockDaily` 交易日組成 TWSE `T86` 的 `date` 參數
 9. 呼叫 `https://www.twse.com.tw/rwd/zh/fund/T86`
-10. 解析三大法人買賣資料並寫入 `InstitutionalTradeDaily`
-11. 將執行結果寫入 Console 與日誌檔
+10. 若三大法人 API 回應異常則自動重試，並在 log 記錄 `stat` 與回應摘要
+11. 解析三大法人買賣資料並寫入 `InstitutionalTradeDaily`
+12. 將執行結果寫入 Console 與日誌檔
 
 ## 技術棧
 
@@ -207,6 +209,7 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - 程式每次執行都會以 API 最新交易日資料覆寫該交易日的既有資料。
 - 三大法人資料依賴 `StockDaily` 的最新交易日來決定 `T86` API 的 `date` 參數，因此執行順序固定為先抓日線、再抓法人。
 - 若 `InstitutionalTradeFetchDate` 設定格式錯誤，程式會直接拋出設定錯誤，避免誤抓資料。
+- 若 `T86` API 暫時回傳異常內容，程式會自動重試 3 次，並把 `stat` 與回應片段寫入 log 方便排查。
 - `InsertStocksAsync` 目前逐筆寫入，若未來資料量或執行頻率提高，可考慮改成批次寫入。
 - `InsertInstitutionalTradesAsync` 目前也採逐筆寫入，若後續資料量增加可再改成批次寫入。
 - 若 API 回傳欄位格式變動，`StockService` 與 `InstitutionalTradeService` 的解析邏輯需要同步調整。

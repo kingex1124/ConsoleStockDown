@@ -12,6 +12,8 @@ namespace ConsoleStockDown.Services;
 /// </summary>
 public sealed class InstitutionalTradeService : IInstitutionalTradeService
 {
+    private const int MaxApiRetryCount = 3;
+    private static readonly TimeSpan ApiRetryDelay = TimeSpan.FromSeconds(2);
     private readonly IInstitutionalTradeRepository _repository;
     private readonly IStockRepository _stockRepository;
     private readonly ILogger<InstitutionalTradeService> _logger;
@@ -60,11 +62,9 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
         using var httpClient = new HttpClient();
         _logger.LogInformation("Calling institutional trade API: {ApiUrl}", apiUrl);
 
-        var response = await httpClient.GetStringAsync(apiUrl);
-        var apiResponse = JsonSerializer.Deserialize<InstitutionalTradeApiResponse>(response);
-        if (apiResponse is null || !string.Equals(apiResponse.Stat, "OK", StringComparison.OrdinalIgnoreCase))
+        var apiResponse = await GetApiResponseWithRetryAsync(httpClient, apiUrl, targetTradeDate);
+        if (apiResponse is null)
         {
-            _logger.LogWarning("Institutional trade API returned an invalid response.");
             return;
         }
 
@@ -146,6 +146,83 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     }
 
     /// <summary>
+    /// 以重試機制呼叫三大法人 API，並在回應異常時記錄狀態與回應片段。
+    /// </summary>
+    private async Task<InstitutionalTradeApiResponse?> GetApiResponseWithRetryAsync(
+        HttpClient httpClient,
+        string apiUrl,
+        string requestedTradeDate)
+    {
+        for (var attempt = 1; attempt <= MaxApiRetryCount; attempt++)
+        {
+            try
+            {
+                var response = await httpClient.GetStringAsync(apiUrl);
+                try
+                {
+                    var apiResponse = JsonSerializer.Deserialize<InstitutionalTradeApiResponse>(response);
+                    if (apiResponse is not null && string.Equals(apiResponse.Stat, "OK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (attempt > 1)
+                        {
+                            _logger.LogInformation(
+                                "Institutional trade API recovered on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}.",
+                                attempt,
+                                MaxApiRetryCount,
+                                requestedTradeDate);
+                        }
+
+                        return apiResponse;
+                    }
+
+                    _logger.LogWarning(
+                        "Institutional trade API returned an abnormal response on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. Stat: {Stat}. ApiUrl: {ApiUrl}. ResponsePreview: {ResponsePreview}",
+                        attempt,
+                        MaxApiRetryCount,
+                        requestedTradeDate,
+                        apiResponse?.Stat ?? "(null)",
+                        apiUrl,
+                        CreateResponsePreview(response));
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Institutional trade API returned invalid JSON on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. ApiUrl: {ApiUrl}. ResponsePreview: {ResponsePreview}",
+                        attempt,
+                        MaxApiRetryCount,
+                        requestedTradeDate,
+                        apiUrl,
+                        CreateResponsePreview(response));
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Institutional trade API request failed on attempt {Attempt}/{MaxAttempts} for trade date {TradeDate}. ApiUrl: {ApiUrl}",
+                    attempt,
+                    MaxApiRetryCount,
+                    requestedTradeDate,
+                    apiUrl);
+            }
+
+            if (attempt < MaxApiRetryCount)
+            {
+                await Task.Delay(ApiRetryDelay);
+            }
+        }
+
+        _logger.LogError(
+            "Institutional trade API failed after {MaxAttempts} attempts for trade date {TradeDate}. ApiUrl: {ApiUrl}",
+            MaxApiRetryCount,
+            requestedTradeDate,
+            apiUrl);
+
+        return null;
+    }
+
+    /// <summary>
     /// 將交易日期代入 API URL 範本，組出實際請求位址。
     /// </summary>
     private string BuildApiUrl(string apiDate)
@@ -172,6 +249,27 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             out var parsed)
             ? parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             : null;
+    }
+
+    /// <summary>
+    /// 將原始 API 回應壓縮成單行片段，方便寫入警告日誌排查問題。
+    /// </summary>
+    private static string CreateResponsePreview(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+        {
+            return "(empty)";
+        }
+
+        var preview = response
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("\t", " ", StringComparison.Ordinal)
+            .Trim();
+
+        return preview.Length <= 240
+            ? preview
+            : $"{preview[..240]}...";
     }
 
     /// <summary>
