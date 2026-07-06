@@ -84,7 +84,23 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
                 targetTradeDate);
         }
 
+        var stocksByCode = await _stockRepository.GetStocksByTradeDateAsync(tradeDate);
+        if (stocksByCode.Count == 0)
+        {
+            _logger.LogWarning(
+                "No StockDaily records found for trade date {TradeDate}. Skipping institutional trade sync.",
+                tradeDate);
+            return;
+        }
+
+        var availableStockCodes = new HashSet<string>(stocksByCode.Keys, StringComparer.Ordinal);
+        _logger.LogInformation(
+            "Filtering institutional trade records by {Count} stock codes from StockDaily trade date {TradeDate}.",
+            availableStockCodes.Count,
+            tradeDate);
+
         var items = new List<InstitutionalTradeDaily>(apiResponse.Data.Count);
+        var skippedCodeCount = 0;
         foreach (var record in apiResponse.Data)
         {
             if (!TryParseRecord(record, tradeDate, rawTradeDate, out var institutionalTrade))
@@ -93,12 +109,28 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
                 continue;
             }
 
+            if (!availableStockCodes.Contains(institutionalTrade.StockCode))
+            {
+                skippedCodeCount++;
+                continue;
+            }
+
             items.Add(institutionalTrade);
+        }
+
+        if (skippedCodeCount > 0)
+        {
+            _logger.LogInformation(
+                "Skipped {Count} institutional trade records because the stock code was not present in StockDaily for trade date {TradeDate}.",
+                skippedCodeCount,
+                tradeDate);
         }
 
         if (items.Count == 0)
         {
-            _logger.LogWarning("No institutional trade records were parsed successfully.");
+            _logger.LogWarning(
+                "No institutional trade records remained after filtering by StockDaily for trade date {TradeDate}.",
+                tradeDate);
             return;
         }
 

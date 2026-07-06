@@ -13,6 +13,7 @@
 - 依前一交易日收盤價計算 `ChangeRate`
 - 三大法人 API 會沿用最新日線交易日組出 `date` 參數，確保資料日期一致
 - 可用 `appsettings.json` 覆寫三大法人抓取日期，方便補抓指定交易日
+- 三大法人資料只保留同交易日 `StockDaily` 已存在的股票代碼
 - 三大法人 API 若回應異常會自動重試 3 次，並在 log 記錄 `stat` 與回應片段
 - 同交易日資料會在單一資料庫交易中整批覆寫，避免執行中斷後留下半套資料
 - 寫入前先刪除同交易日舊資料，避免重複
@@ -37,7 +38,7 @@
 12. 若 `InstitutionalTradeFetchDate` 有設定則使用該日期，否則以最新 `StockDaily` 交易日組成 TWSE `T86` 的 `date` 參數
 13. 呼叫 `https://www.twse.com.tw/rwd/zh/fund/T86`
 14. 若三大法人 API 回應異常則自動重試，並在 log 記錄 `stat` 與回應摘要
-15. 解析三大法人買賣資料並寫入 `InstitutionalTradeDaily`
+15. 以同交易日 `StockDaily` 的股票代碼清單過濾三大法人資料後寫入 `InstitutionalTradeDaily`
 16. 將執行結果寫入 Console 與日誌檔
 
 ## 技術棧
@@ -189,6 +190,7 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - 上櫃 API 若價格或漲跌欄位出現 `除息`、`除權`、`除權息`、`---` 或 `----`，會先以 `0` 寫入避免解析失敗
 - 若有設定 `InstitutionalTradeFetchDate`，三大法人資料會使用該日期查詢 `T86` API
 - 若未設定 `InstitutionalTradeFetchDate`，三大法人資料會以最新 `StockDaily.TradeDate` 轉成 `yyyyMMdd` 查詢 `T86` API
+- 三大法人資料只會保留同交易日已存在於 `StockDaily` 的股票代碼，會自動排除目前流程用不到的其他證券資料
 - `ChangeRate` 計算方式為：
 
 ```text
@@ -223,6 +225,7 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - 程式每次執行都會以 API 最新交易日資料覆寫該交易日的既有資料。
 - 上市資料會先覆寫同交易日的 `StockDaily`，再附加寫入同交易日的上櫃資料。
 - 三大法人資料依賴 `StockDaily` 的最新交易日來決定 `T86` API 的 `date` 參數，因此執行順序固定為先抓上市、再抓上櫃、最後抓法人。
+- 三大法人資料會再依同交易日 `StockDaily` 的股票代碼過濾一次，因此只有本專案已同步的股票代碼會被寫入 `InstitutionalTradeDaily`。
 - 若 `InstitutionalTradeFetchDate` 設定格式錯誤，程式會直接拋出設定錯誤，避免誤抓資料。
 - 若 `T86` API 暫時回傳異常內容，程式會自動重試 3 次，並把 `stat` 與回應片段寫入 log 方便排查。
 - 同一交易日的刪除與重寫會包在單一資料庫交易內，若程式中途中止，該次變更會回滾，不會留下部分股票或法人資料。

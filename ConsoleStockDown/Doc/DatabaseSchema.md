@@ -55,4 +55,5 @@
 - `ChangeRate` 只有當存在前一交易日資料時才會計算，否則可為 `NULL`。
 - 上櫃 API 若回傳 `除息`、`除權`、`除權息`、`---` 或 `----` 等非數值內容，系統會以 `0` 寫入對應數值欄位以避免解析失敗。
 - `InstitutionalTradeDaily` 來自 TWSE `T86` API，`TradeDate` 會依最新 `StockDaily` 交易日轉成 `yyyyMMdd` 後查詢，確保兩張表使用相同交易日。
+- 寫入 `InstitutionalTradeDaily` 前，系統會先以同交易日 `StockDaily` 已存在的股票代碼過濾資料，只保留本專案實際需要的股票。
 - 資料庫建置時會建立 `StockDaily` 與 `InstitutionalTradeDaily` 資料表，並將對應 API 回傳資料寫入各自的資料表。
