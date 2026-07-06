@@ -23,10 +23,12 @@ using IHost host = Host.CreateDefaultBuilder(args)
         var connectionString = $"Data Source={dbPath};Pooling=true;";
         var logFilePath = Path.Combine(basePath, appSettings.LogFilePath);
 
+        services.AddSingleton<LatestTradeDateContext>();
         services.AddSingleton<IStockRepository>(_ => new StockRepository(connectionString));
         services.AddSingleton<IInstitutionalTradeRepository>(_ => new InstitutionalTradeRepository(connectionString));
         services.AddSingleton<IStockService>(_ => new StockService(
             _.GetRequiredService<IStockRepository>(),
+            _.GetRequiredService<LatestTradeDateContext>(),
             _.GetRequiredService<ILogger<StockService>>(),
             appSettings.ApiUrl));
         services.AddSingleton<IOtcStockService>(_ => new OtcStockService(
@@ -36,6 +38,7 @@ using IHost host = Host.CreateDefaultBuilder(args)
         services.AddSingleton<IInstitutionalTradeService>(_ => new InstitutionalTradeService(
             _.GetRequiredService<IInstitutionalTradeRepository>(),
             _.GetRequiredService<IStockRepository>(),
+            _.GetRequiredService<LatestTradeDateContext>(),
             _.GetRequiredService<ILogger<InstitutionalTradeService>>(),
             appSettings.InstitutionalTradeApiUrlTemplate,
             appSettings.OtcInstitutionalTradeApiUrlTemplate,

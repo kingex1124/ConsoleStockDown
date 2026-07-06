@@ -14,7 +14,6 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
 {
     private const int MaxApiRetryCount = 3;
     private static readonly TimeSpan ApiRetryDelay = TimeSpan.FromSeconds(2);
-    private static readonly string[] TaiwanTimeZoneIds = ["Taipei Standard Time", "Asia/Taipei"];
     private delegate bool InstitutionalTradeRecordParser(
         IReadOnlyList<JsonElement> record,
         string tradeDate,
@@ -22,6 +21,7 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
         out InstitutionalTradeDaily institutionalTrade);
     private readonly IInstitutionalTradeRepository _repository;
     private readonly IStockRepository _stockRepository;
+    private readonly LatestTradeDateContext _latestTradeDateContext;
     private readonly ILogger<InstitutionalTradeService> _logger;
     private readonly string _twseApiUrlTemplate;
     private readonly string _otcApiUrlTemplate;
@@ -33,6 +33,7 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     public InstitutionalTradeService(
         IInstitutionalTradeRepository repository,
         IStockRepository stockRepository,
+        LatestTradeDateContext latestTradeDateContext,
         ILogger<InstitutionalTradeService> logger,
         string twseApiUrlTemplate,
         string otcApiUrlTemplate,
@@ -40,6 +41,7 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
     {
         _repository = repository;
         _stockRepository = stockRepository;
+        _latestTradeDateContext = latestTradeDateContext;
         _logger = logger;
         _twseApiUrlTemplate = twseApiUrlTemplate;
         _otcApiUrlTemplate = otcApiUrlTemplate;
@@ -496,19 +498,16 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
             return configuredTradeDate;
         }
 
-        var currentTaiwanDate = GetCurrentTaiwanDate().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var latestTradeDate = await _stockRepository.GetLatestTradeDateBeforeDateAsync(currentTaiwanDate);
-        if (latestTradeDate is not null)
+        if (!string.IsNullOrWhiteSpace(_latestTradeDateContext.LatestTwseTradeDate))
         {
             _logger.LogInformation(
-                "No InstitutionalTradeFetchDate configured. Using latest stock trade date {TradeDate} before current Taiwan date {CurrentDate}.",
-                latestTradeDate,
-                currentTaiwanDate);
+                "No InstitutionalTradeFetchDate configured. Using TWSE stock API trade date {TradeDate} resolved from AppSettings.ApiUrl.",
+                _latestTradeDateContext.LatestTwseTradeDate);
 
-            return latestTradeDate;
+            return _latestTradeDateContext.LatestTwseTradeDate;
         }
 
-        latestTradeDate = await _stockRepository.GetLatestTradeDateAsync();
+        var latestTradeDate = await _stockRepository.GetLatestTradeDateAsync();
         if (latestTradeDate is null)
         {
             _logger.LogWarning("No stock trade date found. Skipping institutional trade sync.");
@@ -516,43 +515,10 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
         }
 
         _logger.LogWarning(
-            "No stock trade date found before current Taiwan date {CurrentDate}. Falling back to latest stock trade date {TradeDate}.",
-            currentTaiwanDate,
+            "TWSE stock API trade date was unavailable in the current execution. Falling back to latest stock trade date {TradeDate} from database.",
             latestTradeDate);
 
         return latestTradeDate;
-    }
-
-    /// <summary>
-    /// 取得台灣時區的目前日期，供預設交易日判斷使用。
-    /// </summary>
-    private static DateOnly GetCurrentTaiwanDate()
-    {
-        var taiwanTimeZone = ResolveTaiwanTimeZone();
-        var taiwanNow = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, taiwanTimeZone);
-        return DateOnly.FromDateTime(taiwanNow.DateTime);
-    }
-
-    /// <summary>
-    /// 解析台灣時區，兼容 Windows 與 Linux/macOS 的時區識別名稱。
-    /// </summary>
-    private static TimeZoneInfo ResolveTaiwanTimeZone()
-    {
-        foreach (var timeZoneId in TaiwanTimeZoneIds)
-        {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
-            }
-            catch (TimeZoneNotFoundException)
-            {
-            }
-            catch (InvalidTimeZoneException)
-            {
-            }
-        }
-
-        return TimeZoneInfo.Local;
     }
 
     /// <summary>

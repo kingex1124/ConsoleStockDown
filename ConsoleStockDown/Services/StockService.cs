@@ -12,15 +12,21 @@ namespace ConsoleStockDown.Services;
 public sealed class StockService : IStockService
 {
     private readonly IStockRepository _repository;
+    private readonly LatestTradeDateContext _latestTradeDateContext;
     private readonly ILogger<StockService> _logger;
     private readonly string _apiUrl;
 
     /// <summary>
     /// 建立股票日資料服務。
     /// </summary>
-    public StockService(IStockRepository repository, ILogger<StockService> logger, string apiUrl)
+    public StockService(
+        IStockRepository repository,
+        LatestTradeDateContext latestTradeDateContext,
+        ILogger<StockService> logger,
+        string apiUrl)
     {
         _repository = repository;
+        _latestTradeDateContext = latestTradeDateContext;
         _logger = logger;
         _apiUrl = apiUrl;
     }
@@ -53,6 +59,8 @@ public sealed class StockService : IStockService
         }
 
         var apiTradeDate = ConvertDate(rawApiTradeDate);
+        _latestTradeDateContext.LatestTwseTradeDate = apiTradeDate;
+        _logger.LogInformation("Resolved TWSE stock API trade date {TradeDate} for downstream services.", apiTradeDate);
         var priorTradeDate = await _repository.GetLatestTradeDateBeforeDateAsync(apiTradeDate);
         IReadOnlyDictionary<string, StockDaily> priorStocksByCode = new Dictionary<string, StockDaily>(StringComparer.Ordinal);
         if (priorTradeDate is not null)
