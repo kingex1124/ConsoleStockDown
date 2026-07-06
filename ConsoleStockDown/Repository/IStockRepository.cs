@@ -28,7 +28,17 @@ public interface IStockRepository
     Task<string?> GetLatestTradeDateBeforeDateAsync(string tradeDate);
 
     /// <summary>
+    /// 取得指定交易日期的全部股票資料，供服務層建立索引使用。
+    /// </summary>
+    Task<IReadOnlyDictionary<string, StockDaily>> GetStocksByTradeDateAsync(string tradeDate);
+
+    /// <summary>
     /// 以交易方式覆寫指定交易日期的全部股票資料。
     /// </summary>
     Task ReplaceByTradeDateAsync(string tradeDate, IEnumerable<StockDaily> items);
+
+    /// <summary>
+    /// 以交易方式附加寫入股票資料。
+    /// </summary>
+    Task InsertAsync(IEnumerable<StockDaily> items);
 }

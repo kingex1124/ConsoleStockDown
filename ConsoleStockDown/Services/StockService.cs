@@ -54,14 +54,19 @@ public sealed class StockService : IStockService
 
         var apiTradeDate = ConvertDate(rawApiTradeDate);
         var priorTradeDate = await _repository.GetLatestTradeDateBeforeDateAsync(apiTradeDate);
+        IReadOnlyDictionary<string, StockDaily> priorStocksByCode = new Dictionary<string, StockDaily>(StringComparer.Ordinal);
         if (priorTradeDate is not null)
         {
             _logger.LogInformation("Using prior trade date {PriorTradeDate} for API trade date {TradeDate}.", priorTradeDate, apiTradeDate);
+            priorStocksByCode = await _repository.GetStocksByTradeDateAsync(priorTradeDate);
         }
         else
         {
             _logger.LogWarning("No prior trade date found before API trade date {TradeDate}.", apiTradeDate);
         }
+
+        var missingPriorStockCodes = new List<string>();
+        var missingPriorStockCount = 0;
 
         foreach (var record in records)
         {
@@ -73,14 +78,17 @@ public sealed class StockService : IStockService
 
             if (priorTradeDate is not null)
             {
-                var priorRecord = await _repository.GetStockByCodeAndTradeDateAsync(stockDaily.StockCode, priorTradeDate);
-                if (priorRecord is not null)
+                if (priorStocksByCode.TryGetValue(stockDaily.StockCode, out var priorRecord))
                 {
                     stockDaily.ChangeRate = CalculateChangeRate(priorRecord.ClosingPrice, stockDaily.ClosingPrice);
                 }
                 else
                 {
-                    _logger.LogWarning("No prior stock record found for stock {StockCode} on prior trade date {PriorTradeDate}.", stockDaily.StockCode, priorTradeDate);
+                    missingPriorStockCount++;
+                    if (missingPriorStockCodes.Count < 10)
+                    {
+                        missingPriorStockCodes.Add(stockDaily.StockCode);
+                    }
                 }
             }
             else
@@ -89,6 +97,15 @@ public sealed class StockService : IStockService
             }
 
             stockItems.Add(stockDaily);
+        }
+
+        if (priorTradeDate is not null && missingPriorStockCount > 0)
+        {
+            _logger.LogInformation(
+                "Skipped change rate calculation for {Count} TWSE stocks because no prior-day record existed on {PriorTradeDate}. Sample codes: {StockCodes}",
+                missingPriorStockCount,
+                priorTradeDate,
+                string.Join(", ", missingPriorStockCodes));
         }
 
         var latestTradeDate = stockItems.Select(x => x.TradeDate).Distinct().OrderByDescending(x => x).First();

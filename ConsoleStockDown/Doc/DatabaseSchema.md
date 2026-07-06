@@ -5,18 +5,18 @@
 | 欄位名稱 | API 欄位名稱 | 資料型別 | 是否可空 | 中文說明 |
 | --- | --- | --- | --- | --- |
 | Id | - | int | 否 | 主鍵，自動遞增識別碼 |
-| TradeDate | Date | string | 否 | 交易日期，格式為 `yyyy-MM-dd` |
-| RawDate | Date | string | 否 | 原始 API 回傳日期，可能為民國年或西元年格式 |
-| StockCode | Code | string | 否 | 股票代號 |
-| StockName | Name | string | 否 | 股票名稱 |
-| TradeVolume | TradeVolume | long | 否 | 成交股數 |
-| TradeValue | TradeValue | long | 否 | 成交金額 |
-| OpeningPrice | OpeningPrice | decimal | 否 | 開盤價 |
-| HighestPrice | HighestPrice | decimal | 否 | 最高價 |
-| LowestPrice | LowestPrice | decimal | 否 | 最低價 |
-| ClosingPrice | ClosingPrice | decimal | 否 | 收盤價 |
-| PriceChange | Change | decimal | 否 | 漲跌價差 |
-| TransactionCount | Transaction | int | 否 | 成交筆數 |
+| TradeDate | Date / Date | string | 否 | 交易日期，格式為 `yyyy-MM-dd` |
+| RawDate | Date / Date | string | 否 | 原始 API 回傳日期，可能為民國年或西元年格式 |
+| StockCode | Code / SecuritiesCompanyCode | string | 否 | 股票代號 |
+| StockName | Name / CompanyName | string | 否 | 股票名稱 |
+| TradeVolume | TradeVolume / TradingShares | long | 否 | 成交股數 |
+| TradeValue | TradeValue / TransactionAmount | long | 否 | 成交金額 |
+| OpeningPrice | OpeningPrice / Open | decimal | 否 | 開盤價 |
+| HighestPrice | HighestPrice / High | decimal | 否 | 最高價 |
+| LowestPrice | LowestPrice / Low | decimal | 否 | 最低價 |
+| ClosingPrice | ClosingPrice / Close | decimal | 否 | 收盤價 |
+| PriceChange | Change / Change | decimal | 否 | 漲跌價差 |
+| TransactionCount | Transaction / TransactionNumber | int | 否 | 成交筆數 |
 | ChangeRate | - | decimal? | 是 | 漲跌幅（相對前一交易日收盤價的變化率） |
 
 ## InstitutionalTradeDaily 資料表結構
@@ -51,6 +51,8 @@
 - `Id` 為資料表主鍵，透過 Linq2DB 的 `Identity` 屬性自動遞增。
 - `TradeDate` 用於查詢與判斷資料是否已存在，格式統一為 `yyyy-MM-dd`。
 - `RawDate` 用於保留原始 API 回傳日期，方便除錯與比對。
+- `StockDaily` 同時儲存 TWSE `STOCK_DAY_ALL` 與 TPEX `tpex_mainboard_quotes` 的日資料。
 - `ChangeRate` 只有當存在前一交易日資料時才會計算，否則可為 `NULL`。
+- 上櫃 API 若回傳 `除息`、`除權`、`除權息`、`---` 或 `----` 等非數值內容，系統會以 `0` 寫入對應數值欄位以避免解析失敗。
 - `InstitutionalTradeDaily` 來自 TWSE `T86` API，`TradeDate` 會依最新 `StockDaily` 交易日轉成 `yyyyMMdd` 後查詢，確保兩張表使用相同交易日。
 - 資料庫建置時會建立 `StockDaily` 與 `InstitutionalTradeDaily` 資料表，並將對應 API 回傳資料寫入各自的資料表。

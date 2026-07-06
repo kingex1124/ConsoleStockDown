@@ -44,6 +44,21 @@ public sealed class StockRepository : IStockRepository
     }
 
     /// <summary>
+    /// 取得指定交易日期的全部股票資料，並以股票代號建立索引。
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, StockDaily>> GetStocksByTradeDateAsync(string tradeDate)
+    {
+        using var db = new AppDataConnection(_connectionString);
+        var items = await db.GetTable<StockDaily>()
+            .Where(x => x.TradeDate == tradeDate)
+            .ToListAsync();
+
+        return items
+            .GroupBy(x => x.StockCode)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// 查詢目前資料庫中最新的交易日期。
     /// </summary>
     public async Task<string?> GetLatestTradeDateAsync()
@@ -77,6 +92,22 @@ public sealed class StockRepository : IStockRepository
         await db.GetTable<StockDaily>()
             .Where(x => x.TradeDate == tradeDate)
             .DeleteAsync();
+
+        foreach (var item in items)
+        {
+            await db.InsertAsync(item);
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>
+    /// 以單一交易附加寫入多筆股票資料。
+    /// </summary>
+    public async Task InsertAsync(IEnumerable<StockDaily> items)
+    {
+        using var db = new AppDataConnection(_connectionString);
+        using var transaction = db.BeginTransaction();
 
         foreach (var item in items)
         {

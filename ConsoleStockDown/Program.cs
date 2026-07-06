@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using IHost host = Host.CreateDefaultBuilder(args)
     .ConfigureAppConfiguration((context, config) =>
     {
+        config.SetBasePath(AppContext.BaseDirectory);
         config.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
     })
     .ConfigureServices((context, services) =>
@@ -28,6 +29,10 @@ using IHost host = Host.CreateDefaultBuilder(args)
             _.GetRequiredService<IStockRepository>(),
             _.GetRequiredService<ILogger<StockService>>(),
             appSettings.ApiUrl));
+        services.AddSingleton<IOtcStockService>(_ => new OtcStockService(
+            _.GetRequiredService<IStockRepository>(),
+            _.GetRequiredService<ILogger<OtcStockService>>(),
+            appSettings.OtcApiUrl));
         services.AddSingleton<IInstitutionalTradeService>(_ => new InstitutionalTradeService(
             _.GetRequiredService<IInstitutionalTradeRepository>(),
             _.GetRequiredService<IStockRepository>(),
@@ -47,6 +52,7 @@ using IHost host = Host.CreateDefaultBuilder(args)
 
 var logger = host.Services.GetRequiredService<ILogger<Program>>();
 var stockService = host.Services.GetRequiredService<IStockService>();
+var otcStockService = host.Services.GetRequiredService<IOtcStockService>();
 var institutionalTradeService = host.Services.GetRequiredService<IInstitutionalTradeService>();
 
 logger.LogInformation("Application started.");
@@ -54,6 +60,7 @@ logger.LogInformation("Application started.");
 try
 {
     await stockService.FetchAndStoreLatestAsync();
+    await otcStockService.FetchAndStoreLatestAsync();
     await institutionalTradeService.FetchAndStoreLatestAsync();
     logger.LogInformation("Service execution completed successfully.");
 }
