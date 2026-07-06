@@ -13,12 +13,7 @@ public interface IInstitutionalTradeRepository
     Task InitializeDatabaseAsync();
 
     /// <summary>
-    /// 刪除指定交易日期的三大法人資料。
+    /// 以交易方式覆寫指定交易日期的全部三大法人資料。
     /// </summary>
-    Task DeleteByTradeDateAsync(string tradeDate);
-
-    /// <summary>
-    /// 新增一批三大法人資料。
-    /// </summary>
-    Task InsertInstitutionalTradesAsync(IEnumerable<InstitutionalTradeDaily> items);
+    Task ReplaceByTradeDateAsync(string tradeDate, IEnumerable<InstitutionalTradeDaily> items);
 }

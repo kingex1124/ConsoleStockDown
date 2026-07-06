@@ -94,8 +94,7 @@ public sealed class StockService : IStockService
         var latestTradeDate = stockItems.Select(x => x.TradeDate).Distinct().OrderByDescending(x => x).First();
         _logger.LogInformation("Persisting {Count} records for trade date {TradeDate}.", stockItems.Count, latestTradeDate);
 
-        await _repository.DeleteByTradeDateAsync(latestTradeDate);
-        await _repository.InsertStocksAsync(stockItems);
+        await _repository.ReplaceByTradeDateAsync(latestTradeDate, stockItems);
 
         _logger.LogInformation("Inserted {Count} records for trade date {TradeDate}.", stockItems.Count, latestTradeDate);
     }

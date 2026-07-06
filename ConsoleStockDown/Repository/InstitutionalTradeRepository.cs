@@ -31,25 +31,22 @@ public sealed class InstitutionalTradeRepository : IInstitutionalTradeRepository
     }
 
     /// <summary>
-    /// 刪除指定交易日期的全部三大法人資料。
+    /// 以單一交易刪除並重建指定交易日期的三大法人資料，避免中途中斷留下部分資料。
     /// </summary>
-    public async Task DeleteByTradeDateAsync(string tradeDate)
+    public async Task ReplaceByTradeDateAsync(string tradeDate, IEnumerable<InstitutionalTradeDaily> items)
     {
         using var db = new AppDataConnection(_connectionString);
+        using var transaction = db.BeginTransaction();
+
         await db.GetTable<InstitutionalTradeDaily>()
             .Where(x => x.TradeDate == tradeDate)
             .DeleteAsync();
-    }
 
-    /// <summary>
-    /// 逐筆寫入三大法人資料。
-    /// </summary>
-    public async Task InsertInstitutionalTradesAsync(IEnumerable<InstitutionalTradeDaily> items)
-    {
-        using var db = new AppDataConnection(_connectionString);
         foreach (var item in items)
         {
             await db.InsertAsync(item);
         }
+
+        transaction.Commit();
     }
 }

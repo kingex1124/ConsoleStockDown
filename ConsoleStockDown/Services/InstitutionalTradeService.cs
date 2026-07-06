@@ -104,8 +104,7 @@ public sealed class InstitutionalTradeService : IInstitutionalTradeService
 
         _logger.LogInformation("Persisting {Count} institutional trade records for trade date {TradeDate}.", items.Count, tradeDate);
 
-        await _repository.DeleteByTradeDateAsync(tradeDate);
-        await _repository.InsertInstitutionalTradesAsync(items);
+        await _repository.ReplaceByTradeDateAsync(tradeDate, items);
 
         _logger.LogInformation("Inserted {Count} institutional trade records for trade date {TradeDate}.", items.Count, tradeDate);
     }

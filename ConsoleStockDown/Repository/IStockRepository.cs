@@ -28,12 +28,7 @@ public interface IStockRepository
     Task<string?> GetLatestTradeDateBeforeDateAsync(string tradeDate);
 
     /// <summary>
-    /// 刪除指定交易日期的股票資料。
+    /// 以交易方式覆寫指定交易日期的全部股票資料。
     /// </summary>
-    Task DeleteByTradeDateAsync(string tradeDate);
-
-    /// <summary>
-    /// 新增一批股票日資料。
-    /// </summary>
-    Task InsertStocksAsync(IEnumerable<StockDaily> items);
+    Task ReplaceByTradeDateAsync(string tradeDate, IEnumerable<StockDaily> items);
 }

@@ -13,6 +13,7 @@
 - 三大法人 API 會沿用最新日線交易日組出 `date` 參數，確保資料日期一致
 - 可用 `appsettings.json` 覆寫三大法人抓取日期，方便補抓指定交易日
 - 三大法人 API 若回應異常會自動重試 3 次，並在 log 記錄 `stat` 與回應片段
+- 同交易日資料會在單一資料庫交易中整批覆寫，避免執行中斷後留下半套資料
 - 寫入前先刪除同交易日舊資料，避免重複
 - 同時輸出 Console 與檔案日誌
 - 日誌檔依日期分檔，例如 `stock-service-2026-07-01.log`
@@ -210,8 +211,8 @@ dotnet run --project .\ConsoleStockDown\ConsoleStockDown.csproj
 - 三大法人資料依賴 `StockDaily` 的最新交易日來決定 `T86` API 的 `date` 參數，因此執行順序固定為先抓日線、再抓法人。
 - 若 `InstitutionalTradeFetchDate` 設定格式錯誤，程式會直接拋出設定錯誤，避免誤抓資料。
 - 若 `T86` API 暫時回傳異常內容，程式會自動重試 3 次，並把 `stat` 與回應片段寫入 log 方便排查。
-- `InsertStocksAsync` 目前逐筆寫入，若未來資料量或執行頻率提高，可考慮改成批次寫入。
-- `InsertInstitutionalTradesAsync` 目前也採逐筆寫入，若後續資料量增加可再改成批次寫入。
+- 同一交易日的刪除與重寫會包在單一資料庫交易內，若程式中途中止，該次變更會回滾，不會留下部分股票或法人資料。
+- 股票與三大法人資料目前仍採逐筆寫入，若未來資料量或執行頻率提高，可考慮改成批次寫入。
 - 若 API 回傳欄位格式變動，`StockService` 與 `InstitutionalTradeService` 的解析邏輯需要同步調整。
 
 ## 後續可擴充方向
