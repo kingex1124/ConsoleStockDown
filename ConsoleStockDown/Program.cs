@@ -26,6 +26,7 @@ using IHost host = Host.CreateDefaultBuilder(args)
         services.AddSingleton<LatestTradeDateContext>();
         services.AddSingleton<IStockRepository>(_ => new StockRepository(connectionString));
         services.AddSingleton<IInstitutionalTradeRepository>(_ => new InstitutionalTradeRepository(connectionString));
+        services.AddSingleton<IMonthlyRevenueSummaryRepository>(_ => new MonthlyRevenueSummaryRepository(connectionString));
         services.AddSingleton<IStockService>(_ => new StockService(
             _.GetRequiredService<IStockRepository>(),
             _.GetRequiredService<LatestTradeDateContext>(),
@@ -50,6 +51,10 @@ using IHost host = Host.CreateDefaultBuilder(args)
             _.GetRequiredService<ILogger<InstitutionalTradeService>>(),
             appSettings.InstitutionalTradeApiUrlTemplate,
             appSettings.InstitutionalTradeFetchDate));
+        services.AddSingleton<IMonthlyRevenueSummaryService>(_ => new MonthlyRevenueSummaryService(
+            _.GetRequiredService<IMonthlyRevenueSummaryRepository>(),
+            _.GetRequiredService<ILogger<MonthlyRevenueSummaryService>>(),
+            appSettings.MonthlyRevenueApiUrl));
         services.AddSingleton(appSettings);
 
         services.AddLogging(builder =>
@@ -65,6 +70,7 @@ var logger = host.Services.GetRequiredService<ILogger<Program>>();
 var stockService = host.Services.GetRequiredService<IStockService>();
 var otcStockService = host.Services.GetRequiredService<IOtcStockService>();
 var institutionalTradeService = host.Services.GetRequiredService<IInstitutionalTradeService>();
+var monthlyRevenueSummaryService = host.Services.GetRequiredService<IMonthlyRevenueSummaryService>();
 
 logger.LogInformation("Application started.");
 
@@ -73,6 +79,7 @@ try
     await stockService.FetchAndStoreLatestAsync();
     await otcStockService.FetchAndStoreLatestAsync();
     await institutionalTradeService.FetchAndStoreLatestAsync();
+    await monthlyRevenueSummaryService.FetchAndStoreLatestAsync();
     logger.LogInformation("Service execution completed successfully.");
 }
 catch (Exception ex)

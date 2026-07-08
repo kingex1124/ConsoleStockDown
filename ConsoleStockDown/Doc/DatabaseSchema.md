@@ -46,6 +46,28 @@
 | DealerHedgeNet | 自營商買賣超股數(避險) | long | 否 | 自營商避險買賣超股數 |
 | InstitutionalInvestorsNet | 三大法人買賣超股數 | long | 否 | 三大法人合計買賣超股數 |
 
+## MonthlyRevenueSummary 資料表結構
+
+| 欄位名稱 | API 欄位名稱 | 資料型別 | 是否可空 | 中文說明 |
+| --- | --- | --- | --- | --- |
+| Id | - | int | 否 | 主鍵，自動遞增識別碼 |
+| RevenueMonth | 資料年月 | string | 否 | 營收所屬月份，格式為 `yyyy-MM` |
+| RawRevenueMonth | 資料年月 | string | 否 | 原始 API 回傳資料年月，通常為民國年月份格式 |
+| ReportDate | 出表日期 | string | 否 | 出表日期，格式為 `yyyy-MM-dd` |
+| RawReportDate | 出表日期 | string | 否 | 原始 API 回傳出表日期，通常為民國年月日格式 |
+| StockCode | 公司代號 | string | 否 | 公司代號 |
+| StockName | 公司名稱 | string | 否 | 公司名稱 |
+| IndustryCategory | 產業別 | string | 否 | 公司所屬產業別 |
+| CurrentMonthRevenue | 營業收入-當月營收 | long | 否 | 當月營收 |
+| PreviousMonthRevenue | 營業收入-上月營收 | long | 否 | 上月營收 |
+| LastYearSameMonthRevenue | 營業收入-去年當月營收 | long | 否 | 去年同月營收 |
+| MonthOverMonthChangeRate | 營業收入-上月比較增減(%) | decimal? | 是 | 當月營收相對上月的增減百分比 |
+| YearOverYearChangeRate | 營業收入-去年同月增減(%) | decimal? | 是 | 當月營收相對去年同月的增減百分比 |
+| CurrentCumulativeRevenue | 累計營業收入-當月累計營收 | long | 否 | 今年截至當月的累計營收 |
+| LastYearCumulativeRevenue | 累計營業收入-去年累計營收 | long | 否 | 去年同期累計營收 |
+| CumulativeYearOverYearChangeRate | 累計營業收入-前期比較增減(%) | decimal? | 是 | 累計營收相對去年同期的增減百分比 |
+| Note | 備註 | string | 否 | API 回傳備註內容，無資料時通常為 `-` |
+
 ## 說明
 
 - `Id` 為資料表主鍵，透過 Linq2DB 的 `Identity` 屬性自動遞增。
@@ -57,4 +79,7 @@
 - `InstitutionalTradeDaily` 來自 TWSE `T86` API 與 TPEX `3itrade_hedge_result` API，若未指定抓取日期，`TradeDate` 會依 `ApiUrl` 本次抓回的上市交易日轉成上市 `yyyyMMdd` 與上櫃民國 `yyy/MM/dd` 後查詢，確保兩張表使用相同交易日。
 - 寫入 `InstitutionalTradeDaily` 前，系統會先以同交易日 `StockDaily` 已存在的股票代碼過濾上市與上櫃法人資料，只保留本專案實際需要的股票。
 - 上市與上櫃法人資料分別由對應 service 依序寫入，最終共同保存於同一張 `InstitutionalTradeDaily` 資料表。
-- 資料庫建置時會建立 `StockDaily` 與 `InstitutionalTradeDaily` 資料表，並將對應 API 回傳資料寫入各自的資料表。
+- `MonthlyRevenueSummary` 來自 TWSE OpenAPI `t187ap05_L`，會保留 `出表日期` 與 `資料年月` 的原始值，同時轉成 `ReportDate` 與 `RevenueMonth` 供查詢使用。
+- `MonthlyRevenueSummary` 每次執行都會重新抓取 API，但只有在該 `RevenueMonth` 尚未存在於資料庫時才會整批寫入，因此適合每日排程下每月補一筆新月份資料。
+- 月營收的百分比欄位若 API 回傳空字串或 `-`，系統會以 `NULL` 儲存，保留「無法比較」的語意。
+- 資料庫建置時會建立 `StockDaily`、`InstitutionalTradeDaily` 與 `MonthlyRevenueSummary` 資料表，並將對應 API 回傳資料寫入各自的資料表。
